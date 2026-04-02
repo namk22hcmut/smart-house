@@ -1,0 +1,12 @@
+[{
+  "username": "admin_h01",
+  "full_name": "Chủ nhà H01",
+  "role": "admin",
+  "owned_houses": ["H01"]
+},
+{
+  "username": "user_demo",
+  "full_name": "Người dùng Demo",
+  "role": "user",
+  "owned_houses": ["H01"]
+}]

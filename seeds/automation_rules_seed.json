@@ -1,0 +1,13 @@
+[{
+  "house_id": "H01",
+  "rule_name": "Auto-Fan-F01",
+  "scope": {"house_id": "H01", "floor_id": "F01"},
+  "logic_operator": "AND",
+  "is_active": true,
+  "conditions": [
+    {"sensor_type": "Temperature", "operator": ">=", "threshold_value": 30}
+  ],
+  "actions": [
+    {"device_id": "D01_FAN", "action_command": "TURN_ON"}
+  ]
+}]

@@ -1,0 +1,16 @@
+[{
+  "house_id": "H01",
+  "alert_type": "AUTOMATION",
+  "level": "INFO",
+  "message": "Đã tự động bật Quạt H01 do Độ ẩm vượt ngưỡng.",
+  "status": "unread",
+  "timestamp": {"$date": "2026-04-02T07:50:00Z"}
+},
+{
+  "house_id": "H02",
+  "alert_type": "SECURITY",
+  "level": "WARNING",
+  "message": "Phát hiện chuyển động lạ tại Phòng Khách H02.",
+  "status": "read",
+  "timestamp": {"$date": "2026-04-02T02:30:00Z"}
+}]
