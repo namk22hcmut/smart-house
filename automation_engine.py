@@ -2,12 +2,21 @@ import os
 import time
 import logging
 import signal
+import requests
+from datetime import datetime
 from pymongo import MongoClient
 
 # Configuration (can be overridden by environment variables)
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 DB_NAME = os.getenv("SMART_HOME_DB", "SmartHome_DB")
 SLEEP_INTERVAL = int(os.getenv("AUTOMATION_INTERVAL", "10"))
+
+# Adafruit IO configuration (optional)
+AIO_USERNAME = os.getenv("AIO_USERNAME")
+AIO_KEY = os.getenv("AIO_KEY")
+# Specific feed keys for temperature/humidity (set these in env)
+AIO_FEED_TEMPERATURE = os.getenv("AIO_FEED_TEMPERATURE")
+AIO_FEED_HUMIDITY = os.getenv("AIO_FEED_HUMIDITY")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("automation_engine")
@@ -30,6 +39,52 @@ def connect_db(uri=MONGO_URI, db_name=DB_NAME):
 def get_latest_value(db, sensor_type):
     doc = db["sensor_data"].find_one({"type": sensor_type}, sort=[("timestamp", -1)])
     return doc.get("value") if doc else None
+
+
+def fetch_adafruit_feed(feed_key):
+    """Fetch latest value from Adafruit IO feed via REST API. Returns numeric value or None."""
+    if not (AIO_USERNAME and AIO_KEY and feed_key):
+        return None
+    url = f"https://io.adafruit.com/api/v2/{AIO_USERNAME}/feeds/{feed_key}/data?limit=1"
+    headers = {"X-AIO-Key": AIO_KEY}
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data:
+            return None
+        val = data[0].get("value")
+        # try convert to float/int
+        try:
+            if isinstance(val, str) and val.isdigit():
+                return int(val)
+            return float(val)
+        except Exception:
+            return val
+    except Exception:
+        logger.debug("Adafruit fetch failed for %s", feed_key, exc_info=True)
+        return None
+
+
+def fetch_and_store_adafruit_data(db):
+    """Fetch configured Adafruit feeds and insert into `sensor_data` collection."""
+    now_ts = int(time.time())
+    # Temperature
+    t_val = fetch_adafruit_feed(AIO_FEED_TEMPERATURE)
+    if t_val is not None:
+        try:
+            db["sensor_data"].insert_one({"type": "Temperature", "value": t_val, "timestamp": now_ts})
+            logger.info("Saved Temperature from Adafruit: %s", t_val)
+        except Exception:
+            logger.exception("Failed to save Temperature to DB")
+    # Humidity
+    h_val = fetch_adafruit_feed(AIO_FEED_HUMIDITY)
+    if h_val is not None:
+        try:
+            db["sensor_data"].insert_one({"type": "Humidity", "value": h_val, "timestamp": now_ts})
+            logger.info("Saved Humidity from Adafruit: %s", h_val)
+        except Exception:
+            logger.exception("Failed to save Humidity to DB")
 
 
 def evaluate_condition(cond, t_val, h_val):
