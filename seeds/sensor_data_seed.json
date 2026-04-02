@@ -1,0 +1,27 @@
+[{
+  "house_id": "H01",
+  "floor_id": "F01",
+  "room_id": "R101",
+  "sensor_id": "TEMP_F01_R101_01",
+  "type": "Temperature",
+  "value": 28.5,
+  "timestamp": {"$date": "2026-04-02T07:45:00Z"}
+},
+{
+  "house_id": "H01",
+  "floor_id": "F01",
+  "room_id": "R102",
+  "sensor_id": "HUMI_F01_R102_01",
+  "type": "Humidity",
+  "value": 72,
+  "timestamp": {"$date": "2026-04-02T07:44:00Z"}
+},
+{
+  "house_id": "H02",
+  "floor_id": "F01",
+  "room_id": "R101",
+  "sensor_id": "TEMP_F01_R101_01",
+  "type": "Temperature",
+  "value": 31,
+  "timestamp": {"$date": "2026-04-02T07:40:00Z"}
+}]
