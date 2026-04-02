@@ -1,71 +1,130 @@
-from pymongo import MongoClient
+import os
 import time
+import logging
+import signal
+from pymongo import MongoClient
 
-# Kết nối Database
-client = MongoClient("mongodb://localhost:27017/")
-db = client["SmartHome_DB"]
+# Configuration (can be overridden by environment variables)
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+DB_NAME = os.getenv("SMART_HOME_DB", "SmartHome_DB")
+SLEEP_INTERVAL = int(os.getenv("AUTOMATION_INTERVAL", "10"))
 
-def check_automation():
-    print("\n--- Đang kiểm tra hệ thống tự động ---")
-    
-    # 1. Lấy dữ liệu cảm biến mới nhất (Ví dụ lấy từ phòng bếp R02)
-    # Ở đây mình giả sử lấy bản ghi mới nhất trong collection sensor_data
-    latest_temp = db["sensor_data"].find_one({"type": "Temperature"}, sort=[("timestamp", -1)])
-    latest_humi = db["sensor_data"].find_one({"type": "Humidity"}, sort=[("timestamp", -1)])
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+logger = logging.getLogger("automation_engine")
 
-    if not latest_temp or not latest_humi:
-        print("Chưa có đủ dữ liệu cảm biến để kiểm tra.")
-        return
+OPERATORS = {
+    ">": lambda a, b: a > b,
+    "<": lambda a, b: a < b,
+    ">=": lambda a, b: a >= b,
+    "<=": lambda a, b: a <= b,
+    "==": lambda a, b: a == b,
+    "!=": lambda a, b: a != b,
+}
 
-    t_val = latest_temp["value"]
-    h_val = latest_humi["value"]
-    print(f"Dữ liệu hiện tại: Temp={t_val}°C, Humi={h_val}%")
 
-    # 2. Lấy tất cả các Rule đang hoạt động (is_active: true)
-    rules = db["automation_rules"].find({"is_active": True})
+def connect_db(uri=MONGO_URI, db_name=DB_NAME):
+    client = MongoClient(uri)
+    return client[db_name]
 
-    for rule in rules:
-        logic = rule["logic_operator"] # "AND" hoặc "OR"
-        conditions_met = []
 
-        # Kiểm tra từng điều kiện trong mảng conditions
-        for cond in rule["conditions"]:
-            is_met = False
-            current_val = t_val if cond["sensor_type"] == "Temperature" else h_val
-            
-            # So sánh dựa trên operator (>, <, ==)
-            if cond["operator"] == ">" and current_val > cond["threshold_value"]:
-                is_met = True
-            elif cond["operator"] == "<" and current_val < cond["threshold_value"]:
-                is_met = True
-            
-            conditions_met.append(is_met)
+def get_latest_value(db, sensor_type):
+    doc = db["sensor_data"].find_one({"type": sensor_type}, sort=[("timestamp", -1)])
+    return doc.get("value") if doc else None
 
-        # 3. Quyết định hành động dựa trên Logic Operator
-        should_activate = False
-        if logic == "AND":
-            should_activate = all(conditions_met)
-        elif logic == "OR":
-            should_activate = any(conditions_met)
 
-        if should_activate:
-            for action in rule["actions"]:
-                device_id = action["device_id"]
-                command = "ON" if "TURN_ON" in action["action_command"] else "OFF"
-                
-                # Cập nhật trạng thái thiết bị trong collection 'devices'
-                db["devices"].update_one(
-                    {"device_id": device_id},
-                    {"$set": {"status": command}}
-                )
-                print(f"✅ Đã kích hoạt '{rule['rule_name']}': Bật {device_id}")
+def evaluate_condition(cond, t_val, h_val):
+    sensor = cond.get("sensor_type")
+    operator = cond.get("operator")
+    threshold = cond.get("threshold_value")
+
+    if operator not in OPERATORS:
+        logger.warning("Unknown operator %s", operator)
+        return False
+
+    if sensor == "Temperature":
+        current_val = t_val
+    elif sensor == "Humidity":
+        current_val = h_val
+    else:
+        logger.warning("Unsupported sensor type %s", sensor)
+        return False
+
+    if current_val is None:
+        return False
+
+    try:
+        return OPERATORS[operator](current_val, threshold)
+    except Exception:
+        logger.exception("Error evaluating condition %s", cond)
+        return False
+
+
+def execute_actions(db, rule_name, actions):
+    for action in actions:
+        device_id = action.get("device_id")
+        cmd = action.get("action_command", "").upper()
+        if "TURN_ON" in cmd or cmd == "ON":
+            status = "ON"
+        elif "TURN_OFF" in cmd or cmd == "OFF":
+            status = "OFF"
         else:
-            print(f"⚪ Rule '{rule['rule_name']}' chưa đủ điều kiện kích hoạt.")
+            status = "ON" if cmd in ("1", "TRUE") else "OFF"
 
-# Chạy kiểm tra mỗi 10 giây
-try:
-    while True:
-        check_automation()
-        time.sleep(10)
-except KeyboardInterrupt:
-    print("Dừng hệ thống.")
+        try:
+            db["devices"].update_one({"device_id": device_id}, {"$set": {"status": status}})
+            logger.info("%s: set %s -> %s", rule_name, device_id, status)
+        except Exception:
+            logger.exception("Failed to update device %s for rule %s", device_id, rule_name)
+
+
+running = True
+
+
+def stop_handler(signum, frame):
+    global running
+    logger.info("Stopping automation engine (signal %s)", signum)
+    running = False
+
+
+def run_loop():
+    db = connect_db()
+    logger.info("Connected to DB %s", DB_NAME)
+
+    while running:
+        try:
+            logger.debug("Checking automation rules...")
+            t_val = get_latest_value(db, "Temperature")
+            h_val = get_latest_value(db, "Humidity")
+
+            if t_val is None or h_val is None:
+                logger.warning("Missing sensor data (temp=%s, humi=%s)", t_val, h_val)
+            else:
+                logger.info("Current values: Temp=%s, Humi=%s", t_val, h_val)
+
+                rules = db["automation_rules"].find({"is_active": True})
+                for rule in rules:
+                    logic = (rule.get("logic_operator") or "AND").upper()
+                    conditions = rule.get("conditions", [])
+                    results = [evaluate_condition(c, t_val, h_val) for c in conditions]
+
+                    should_activate = all(results) if logic == "AND" else any(results)
+
+                    if should_activate:
+                        execute_actions(db, rule.get("rule_name", "<unnamed>"), rule.get("actions", []))
+                    else:
+                        logger.debug("Rule %s not triggered", rule.get("rule_name"))
+
+        except Exception:
+            logger.exception("Unexpected error in automation loop")
+
+        time.sleep(SLEEP_INTERVAL)
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGINT, stop_handler)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, stop_handler)
+    try:
+        run_loop()
+    finally:
+        logger.info("Automation engine stopped")
